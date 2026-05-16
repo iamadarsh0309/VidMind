@@ -63,5 +63,3 @@ def process_input(source : str) -> list:
     chunks =  chunk_audio(wav_path)
     print(f"Generated {len(chunks)} chunks.")
     return chunks
-
-print(process_input("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
