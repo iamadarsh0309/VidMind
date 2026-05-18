@@ -34,7 +34,8 @@ chromadb>=0.5.5
 sentence-transformers>=3.0.1
 
 # PDF / TXT export
-fpdf2>=2.7.9
+xhtml2pdf>=0.2.17
+markdown>=3.7
 reportlab>=4.2.0
 
 # Utilities

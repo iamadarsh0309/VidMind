@@ -29,6 +29,9 @@ downloads/
 chroma_db/
 *.sqlite3
 
+# Generated notes
+notes/
+
 # IDE / OS
 .vscode/
 .idea/
