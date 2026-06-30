@@ -1,9 +1,9 @@
 from langchain_core.runnables import RunnableLambda
-from langchain_mistralai import ChatMistralAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-import os
+
+from core.llm import get_llm
 
 
 MAP_SYSTEM_PROMPT = """You are an expert video analyst. You will be given one section of a video transcript.
@@ -46,21 +46,13 @@ Rules:
 - Neutral, third-person tone."""
 
 
-def get_llm():
-    return ChatMistralAI(
-        model="mistral-small-latest",
-        mistral_api_key=os.getenv("MISTRAL_API_KEY"),
-        temperature=0.3,
-    )
-
-
 def split_transcript(transcript: str) -> list:
     splitter = RecursiveCharacterTextSplitter(chunk_size=3000, chunk_overlap=200)
     return splitter.split_text(transcript)
 
 
 def summarize(transcript: str) -> str:
-    llm = get_llm()
+    llm = get_llm(temperature=0.3)
 
     map_prompt = ChatPromptTemplate.from_messages([
         ("system", MAP_SYSTEM_PROMPT),
@@ -90,7 +82,7 @@ def summarize(transcript: str) -> str:
 
 
 def generate_title(transcript: str) -> str:
-    llm = get_llm()
+    llm = get_llm(temperature=0.3)
 
     title_prompt = ChatPromptTemplate.from_messages([
         ("system", "You generate concise, descriptive video titles. Return only the title, nothing else."),
@@ -105,4 +97,3 @@ def generate_title(transcript: str) -> str:
     )
 
     return title_chain.invoke(transcript)
-

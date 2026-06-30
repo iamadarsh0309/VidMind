@@ -3,209 +3,104 @@ import re
 
 from markdown import markdown
 from xhtml2pdf import pisa
-from langchain_mistralai import ChatMistralAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableLambda
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from core.code_validator import validate_code_in_text
+from core.course_planner import CourseModule, attach_code_to_modules, plan_course
+from core.llm import get_llm
+from core.notes_schema import NoteDocument, document_to_markdown, parse_markdown_to_document, save_notes_json
+from core.primary_reference import retrieve_primary_references
+from core.rag import retrieve_style_references
+from core.style import build_style_context
+from core.transcriber import TranscriptSegment
+
 
 NOTES_DIR = "notes/"
 os.makedirs(NOTES_DIR, exist_ok=True)
 
+DOMAIN_PROMPT = (
+    "You write study notes exclusively for **software engineering, programming, "
+    "and computer science** topics. Do not produce finance, medical, or unrelated content."
+)
 
-SECTION_NOTES_SYSTEM_PROMPT = """You are an expert technical note-taker. You will receive one section of a video transcript.
+SECTION_NOTES_BASE_PROMPT = """You are an expert technical note-taker for software engineering content.
 
-Produce **deep, exhaustive Markdown study notes** for this section. The goal is that a reader who has never seen the video can fully understand and learn from the notes alone.
+Your **primary reference** is the user's canonical tutorial document (FastAPI tutorial format).
+Match its structure: concept explanation → runnable code example → output/behavior → validation rules or pitfalls.
+
+Produce **deep, exhaustive Markdown study notes** for this section.
 
 Rules:
-- Output **only Markdown**. No preamble. No closing remarks. No "Here are the notes".
-- Use `##` for major topics in this section and `###` for sub-topics. Do **not** use a top-level `#` heading — that is reserved for the final document.
-- Cover every concept, claim, example, command, name, number, version, and reference that appears in the section. Do not summarize away detail.
-- **Every technical term, acronym, tool, framework, protocol, or piece of jargon must be explained inline the first time it appears**, in parentheses or italics. Example: "They route traffic via *Envoy (a high-performance L7 proxy from Lyft)* to ..."
-- Use fenced code blocks (```lang) for any code, commands, configs, or URLs.
-- Use tables when comparing options or listing structured pairs (name → meaning, before → after).
-- Use bullet lists for steps, properties, and enumerations. Use short paragraphs for explanations.
-- Preserve the speaker's order of ideas. Quote distinctive phrases sparingly in `*italics*` when they aid memory.
-- Never invent content. If something is unclear in the transcript, omit it.
-- Be thorough. It is fine for one section's notes to be long if the section is dense."""
+- Output **only Markdown**. No preamble.
+- Use `##` for major topics and `###` for sub-topics (no top-level `#`).
+- Follow the primary reference's pattern: short intro paragraph, then Example, then code block, then explanation.
+- Explain every technical term inline on first use (parentheses or italics).
+- Include complete but minimal runnable code snippets like the reference (imports + app setup + endpoint).
+- Use bullet lists for validation rules, operators, and step-by-step flows.
+- Never invent content not in the transcript/code/primary reference.
+- End dense sections with a brief recap when the reference does.
+
+When on-screen code is provided:
+- Merge OCR code with reference-style formatting.
+- Prefer minimal runnable snippets over full file dumps."""
 
 
-SYNTHESIZE_NOTES_SYSTEM_PROMPT = """You are an expert technical editor. You will receive several Markdown note sections, each generated from a consecutive part of the same video transcript, in order.
+SYNTHESIZE_NOTES_BASE_PROMPT = """Merge section notes into one polished software engineering study document.
 
-Merge them into a single, polished, **comprehensive Markdown study document**.
-
-Output structure (use exactly these levels):
-
+Structure:
 # <Video Title>
-A 2-4 sentence introduction describing what the video covers, who it is for, and the main themes.
+Introduction (2-4 sentences)
 
 ## Table of Contents
-A bulleted list linking to each major section using Markdown anchors.
-
-## <First major topic>
-... full notes ...
-
-## <Second major topic>
-... full notes ...
-
-(continue for all topics)
-
+## <Topics...>
 ## Glossary
-A definition list for every technical term, acronym, tool, and framework mentioned in the document. One short, clear definition per item.
-
 ## Key Takeaways
-A bulleted list of 6-12 things a reader should walk away knowing or able to do.
 
-Rules:
-- Preserve **all** content from the input sections. Do not compress, summarize, or drop detail — your job is to organize, deduplicate, and polish, not to shorten.
-- Merge overlapping or repeated points across sections into one place.
-- Keep every inline explanation of jargon. Add more if any terms are still unexplained.
-- Use fenced code blocks, tables, and bullets as appropriate. Keep paragraphs short.
-- Output **only Markdown**. No preamble."""
+Preserve all detail. Deduplicate overlaps. Output only Markdown."""
 
 
 PDF_CSS = """
-@page {
-    size: A4;
-    margin: 2cm 2cm 2cm 2cm;
-    @frame footer {
-        -pdf-frame-content: footerContent;
-        bottom: 1cm;
-        margin-left: 2cm;
-        margin-right: 2cm;
-        height: 1cm;
-    }
-}
-
-body {
-    font-family: Helvetica, Arial, sans-serif;
-    font-size: 11pt;
-    line-height: 1.55;
-    color: #1f2328;
-}
-
-h1 {
-    font-size: 24pt;
-    color: #0b3d91;
-    margin-top: 0;
-    margin-bottom: 16pt;
-    padding-bottom: 6pt;
-    border-bottom: 2px solid #0b3d91;
-}
-
-h2 {
-    font-size: 16pt;
-    color: #0b3d91;
-    margin-top: 18pt;
-    margin-bottom: 8pt;
-    padding-bottom: 3pt;
-    border-bottom: 1px solid #d0d7de;
-}
-
-h3 {
-    font-size: 13pt;
-    color: #24292f;
-    margin-top: 14pt;
-    margin-bottom: 6pt;
-}
-
-h4 {
-    font-size: 11.5pt;
-    color: #24292f;
-    margin-top: 10pt;
-    margin-bottom: 4pt;
-}
-
-p {
-    margin: 0 0 8pt 0;
-    text-align: justify;
-}
-
-ul, ol {
-    margin: 0 0 10pt 0;
-    padding-left: 18pt;
-}
-
-li {
-    margin-bottom: 4pt;
-}
-
+@page { size: A4; margin: 2cm; }
+body { font-family: Helvetica, Arial, sans-serif; font-size: 11pt; line-height: 1.55; color: #1f2328; }
+h1 { font-size: 24pt; color: #0b3d91; border-bottom: 2px solid #0b3d91; padding-bottom: 6pt; }
+h2 { font-size: 16pt; color: #0b3d91; border-bottom: 1px solid #d0d7de; margin-top: 18pt; }
+h3 { font-size: 13pt; color: #24292f; margin-top: 14pt; }
+p { margin: 0 0 8pt 0; }
+ul, ol { margin: 0 0 10pt 0; padding-left: 18pt; }
 strong { color: #0b3d91; }
-em { color: #57606a; }
-
-code {
-    font-family: Courier, monospace;
-    font-size: 9.5pt;
-    background-color: #f6f8fa;
-    color: #b91c1c;
-    padding: 1pt 3pt;
-    border-radius: 3pt;
-}
-
-pre {
-    font-family: Courier, monospace;
-    font-size: 9.5pt;
-    background-color: #f6f8fa;
-    color: #1f2328;
-    padding: 8pt;
-    border: 1px solid #d0d7de;
-    border-radius: 4pt;
-    margin: 8pt 0;
-}
-
-pre code {
-    background-color: transparent;
-    color: #1f2328;
-    padding: 0;
-}
-
-blockquote {
-    border-left: 3px solid #0b3d91;
-    background-color: #f6f8fa;
-    color: #57606a;
-    padding: 6pt 10pt;
-    margin: 8pt 0;
-}
-
-table {
-    border-collapse: collapse;
-    width: 100%;
-    margin: 10pt 0;
-    font-size: 10pt;
-}
-
-th {
-    background-color: #0b3d91;
-    color: white;
-    padding: 5pt 7pt;
-    text-align: left;
-    border: 1px solid #0b3d91;
-}
-
-td {
-    padding: 5pt 7pt;
-    border: 1px solid #d0d7de;
-    vertical-align: top;
-}
-
-a { color: #0b3d91; text-decoration: none; }
-
-hr {
-    border: 0;
-    border-top: 1px solid #d0d7de;
-    margin: 12pt 0;
-}
+code { font-family: Courier, monospace; font-size: 9.5pt; background: #f6f8fa; color: #b91c1c; padding: 1pt 3pt; }
+pre { font-family: Courier, monospace; font-size: 9.5pt; background: #f6f8fa; padding: 8pt; border: 1px solid #d0d7de; }
+blockquote { border-left: 3px solid #0b3d91; background: #f6f8fa; padding: 6pt 10pt; }
+table { border-collapse: collapse; width: 100%; font-size: 10pt; }
+th { background: #0b3d91; color: white; padding: 5pt 7pt; }
+td { padding: 5pt 7pt; border: 1px solid #d0d7de; }
 """
 
 
-def _llm():
-    return ChatMistralAI(
-        model="mistral-small-latest",
-        mistral_api_key=os.getenv("MISTRAL_API_KEY"),
-        temperature=0.2,
-        max_tokens=4096,
-    )
+def _build_section_system_prompt(query_text: str = "") -> str:
+    parts = [DOMAIN_PROMPT, SECTION_NOTES_BASE_PROMPT]
+    style = build_style_context()
+    if style:
+        parts.append(style)
+    if query_text:
+        primary_refs = retrieve_primary_references(query_text, k=3)
+        if primary_refs:
+            parts.append(primary_refs)
+        style_refs = retrieve_style_references(query_text, k=1)
+        if style_refs and style_refs not in (primary_refs or ""):
+            parts.append(style_refs)
+    return "\n\n".join(parts)
+
+
+def _build_synthesize_system_prompt() -> str:
+    parts = [DOMAIN_PROMPT, SYNTHESIZE_NOTES_BASE_PROMPT]
+    style = build_style_context()
+    if style:
+        parts.append("Match the user's note style:\n\n" + style)
+    return "\n\n".join(parts)
 
 
 def _split_transcript(transcript: str, chunk_size: int = 4000, overlap: int = 300) -> list:
@@ -213,36 +108,81 @@ def _split_transcript(transcript: str, chunk_size: int = 4000, overlap: int = 30
     return splitter.split_text(transcript)
 
 
-def _section_notes_chain():
+def _section_notes_chain(query_text: str = ""):
+    system = _build_section_system_prompt(query_text)
     prompt = ChatPromptTemplate.from_messages([
-        ("system", SECTION_NOTES_SYSTEM_PROMPT),
-        ("human", "Transcript section:\n\n{text}"),
+        ("system", system),
+        ("human", "Transcript section:\n\n{text}\n{code_block}"),
     ])
-    return RunnableLambda(lambda x: {"text": x}) | prompt | _llm() | StrOutputParser()
+
+    def _prepare(inputs: dict) -> dict:
+        code = inputs.get("code", "").strip()
+        code_block = ""
+        if code:
+            code_block = f"\nOn-screen code (OCR):\n```\n{code}\n```\n"
+        return {"text": inputs["text"], "code_block": code_block}
+
+    return RunnableLambda(_prepare) | prompt | get_llm(temperature=0.2, max_tokens=4096) | StrOutputParser()
 
 
 def _synthesize_chain():
     prompt = ChatPromptTemplate.from_messages([
-        ("system", SYNTHESIZE_NOTES_SYSTEM_PROMPT),
+        ("system", _build_synthesize_system_prompt()),
         ("human", "Video title: {title}\n\nSection notes (in order):\n\n{text}"),
     ])
-    return prompt | _llm() | StrOutputParser()
+    return prompt | get_llm(temperature=0.2, max_tokens=4096) | StrOutputParser()
 
 
-def generate_notes(transcript: str, title: str) -> str:
-    """Map-reduce: per-section deep notes -> synthesized final Markdown document."""
-    sections = _split_transcript(transcript)
-    print(f"Generating notes for {len(sections)} section(s)...")
+def _generate_module_notes(module: CourseModule) -> str:
+    section = {"text": module.transcript, "code": module.code}
+    query = module.transcript[:500]
+    chain = _section_notes_chain(query_text=query)
+    header = f"<!-- module: {module.title} -->\n"
+    return header + chain.invoke(section)
 
-    section_chain = _section_notes_chain()
-    section_notes = []
-    for i, section in enumerate(sections):
-        print(f"  - Section {i + 1}/{len(sections)}")
-        section_notes.append(section_chain.invoke(section))
+
+def generate_notes(
+    transcript: str,
+    title: str,
+    enriched_chunks: list[dict] | None = None,
+    segments: list[TranscriptSegment] | None = None,
+    use_course_planner: bool = True,
+) -> tuple[str, NoteDocument]:
+    """Map-reduce notes generation. Returns (markdown, NoteDocument)."""
+    module_titles: list[str] = []
+
+    if use_course_planner:
+        modules = plan_course(transcript, segments=segments)
+        if enriched_chunks:
+            modules = attach_code_to_modules(modules, enriched_chunks)
+        module_titles = [m.title for m in modules]
+
+        print(f"Generating notes for {len(modules)} module(s)...")
+        section_notes = []
+        for i, mod in enumerate(modules):
+            print(f"  - Module {i + 1}/{len(modules)}: {mod.title}")
+            section_notes.append(_generate_module_notes(mod))
+    else:
+        if enriched_chunks:
+            sections = [{"text": c.get("text", ""), "code": c.get("code", "")} for c in enriched_chunks]
+        else:
+            sections = [{"text": t, "code": ""} for t in _split_transcript(transcript)]
+
+        print(f"Generating notes for {len(sections)} section(s)...")
+        section_notes = []
+        for i, section in enumerate(sections):
+            print(f"  - Section {i + 1}/{len(sections)}")
+            query = section.get("text", "")[:500]
+            chain = _section_notes_chain(query_text=query)
+            section_notes.append(chain.invoke(section))
 
     combined = "\n\n---\n\n".join(section_notes)
     print("Synthesizing final document...")
-    return _synthesize_chain().invoke({"title": title, "text": combined})
+    notes_md = _synthesize_chain().invoke({"title": title, "text": combined})
+    notes_md = validate_code_in_text(notes_md)
+
+    doc = parse_markdown_to_document(title, notes_md, modules=module_titles)
+    return notes_md, doc
 
 
 def _sanitize_filename(name: str) -> str:
@@ -251,45 +191,54 @@ def _sanitize_filename(name: str) -> str:
 
 
 def _markdown_to_pdf(notes_md: str, output_path: str) -> None:
-    body_html = markdown(
-        notes_md,
-        extensions=["fenced_code", "tables", "sane_lists", "toc"],
-    )
+    body_html = markdown(notes_md, extensions=["fenced_code", "tables", "sane_lists", "toc"])
     full_html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <style>{PDF_CSS}</style>
-</head>
-<body>
-{body_html}
-<div id="footerContent" style="font-size:8pt; color:#57606a; text-align:center;">
-    Page <pdf:pagenumber> of <pdf:pagecount>
-</div>
-</body>
-</html>"""
-
+<html><head><meta charset="utf-8"><style>{PDF_CSS}</style></head>
+<body>{body_html}</body></html>"""
     with open(output_path, "wb") as f:
         result = pisa.CreatePDF(src=full_html, dest=f, encoding="utf-8")
     if result.err:
         raise RuntimeError(f"xhtml2pdf failed with {result.err} error(s)")
 
 
-def save_notes(notes_md: str, title: str, output_dir: str = NOTES_DIR) -> dict:
+def save_notes(
+    notes_md: str,
+    title: str,
+    output_dir: str = NOTES_DIR,
+    doc: NoteDocument | None = None,
+) -> dict:
     os.makedirs(output_dir, exist_ok=True)
     base = _sanitize_filename(title)
     md_path = os.path.join(output_dir, base + ".md")
     pdf_path = os.path.join(output_dir, base + ".pdf")
+    json_path = os.path.join(output_dir, base + ".json")
 
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(notes_md)
 
+    if doc is None:
+        doc = parse_markdown_to_document(title, notes_md)
+    save_notes_json(doc, json_path)
+
     _markdown_to_pdf(notes_md, pdf_path)
-    return {"md": md_path, "pdf": pdf_path}
+    return {"md": md_path, "pdf": pdf_path, "json": json_path}
 
 
-def create_notes(transcript: str, title: str, output_dir: str = NOTES_DIR) -> dict:
-    notes_md = generate_notes(transcript, title)
-    paths = save_notes(notes_md, title, output_dir=output_dir)
-    print(f"Notes saved:\n  - {paths['md']}\n  - {paths['pdf']}")
+def create_notes(
+    transcript: str,
+    title: str,
+    output_dir: str = NOTES_DIR,
+    enriched_chunks: list[dict] | None = None,
+    segments: list[TranscriptSegment] | None = None,
+    use_course_planner: bool = True,
+) -> dict:
+    notes_md, doc = generate_notes(
+        transcript,
+        title,
+        enriched_chunks=enriched_chunks,
+        segments=segments,
+        use_course_planner=use_course_planner,
+    )
+    paths = save_notes(notes_md, title, output_dir=output_dir, doc=doc)
+    print(f"Notes saved:\n  - {paths['md']}\n  - {paths['pdf']}\n  - {paths['json']}")
     return paths

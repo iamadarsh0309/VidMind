@@ -1,4 +1,4 @@
-# Environment variables / secrets
+# Environment / secrets
 .env
 .env.*
 !.env.example
@@ -12,27 +12,69 @@ __pycache__/
 .Python
 build/
 dist/
+*.so
 
 # Virtual environments
 .venv/
 venv/
 env/
 
-# Downloads / generated audio
+# Package managers
+.python-version
+uv.lock
+
+# Downloads / generated media
 downloads/
 *.wav
 *.mp3
 *.m4a
 *.webm
+*.mp4
+*.mkv
+*.avi
+*.mov
 
-# Vector store
+# OCR / frame images (generated at runtime)
+*.jpg
+*.jpeg
+*.png
+!style_samples/scans/.gitkeep
+
+# Handwritten scans (private; keep structure only)
+style_samples/scans/*
+!style_samples/scans/.gitkeep
+
+# Large PDF sources — extract to style_samples/extracted/ instead
+style_samples/*.pdf
+
+# Vector store / local DBs
 chroma_db/
 *.sqlite3
 
-# Generated notes
+# Generated output
 notes/
+notes/approved/
 
-# IDE / OS
+# ML model caches
+.cache/
+models/
+*.pt
+*.bin
+
+# Streamlit
+.streamlit/secrets.toml
+
+# IDE / OS / tooling
 .vscode/
 .idea/
 .DS_Store
+.cursor/
+*.swp
+*.swo
+
+# Personal / unrelated
+resume.tex
+resume.pdf
+
+# Logs
+*.log
