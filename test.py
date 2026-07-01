@@ -1,8 +1,6 @@
+import core.bootstrap  # noqa: F401
+
 from dotenv import load_dotenv
-
-import os
-
-os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
 
 load_dotenv()
 

@@ -2,9 +2,16 @@
 
 from dataclasses import dataclass, field
 
+from core.checkpoint import (
+    find_checkpoint_for_chunks,
+    is_fully_transcribed,
+    save_transcribed,
+    session_key_from_chunks,
+    transcription_from_checkpoint,
+)
 from core.code_aligner import align_code_to_segments, enriched_to_chunks
 from core.domain import is_software_engineering_content
-from core.notes import create_notes, generate_notes, save_notes
+from core.notes import generate_notes, save_notes
 from core.notes_schema import NoteDocument
 from core.summarize import generate_title, summarize
 from core.transcriber import TranscriptionResult, transcribe_all
@@ -26,18 +33,16 @@ class PipelineResult:
     modules: list[str] = field(default_factory=list)
 
 
-def run_pipeline(
+def _continue_from_transcription(
     source: str,
-    language: str = "english",
+    transcription: TranscriptionResult,
     *,
     capture_code: bool = True,
     use_course_planner: bool = True,
     enforce_domain: bool = True,
     output_dir: str = "notes/",
+    checkpoint_path: str | None = None,
 ) -> PipelineResult:
-    chunks = process_input(source)
-    transcription = transcribe_all(chunks, language=language)
-
     domain_ok, domain_reason = True, ""
     if enforce_domain:
         domain_ok, domain_reason = is_software_engineering_content(transcription.text)
@@ -66,6 +71,8 @@ def run_pipeline(
         enriched_chunks=enriched_chunks,
         segments=transcription.segments,
         use_course_planner=use_course_planner,
+        checkpoint_path=checkpoint_path,
+        resume=True,
     )
     note_paths = save_notes(notes_md, title, output_dir=output_dir, doc=notes_doc)
 
@@ -80,4 +87,65 @@ def run_pipeline(
         domain_ok=domain_ok,
         domain_reason=domain_reason,
         modules=notes_doc.modules if notes_doc else [],
+    )
+
+
+def run_pipeline(
+    source: str,
+    language: str = "english",
+    *,
+    capture_code: bool = True,
+    use_course_planner: bool = True,
+    enforce_domain: bool = True,
+    output_dir: str = "notes/",
+    skip_transcription: bool = False,
+    checkpoint_path: str | None = None,
+    reuse_chunks: bool = False,
+) -> PipelineResult:
+    transcription: TranscriptionResult | None = None
+    chunks: list | None = None
+    active_checkpoint_path: str | None = checkpoint_path
+
+    if skip_transcription and checkpoint_path:
+        from core.checkpoint import load_checkpoint
+
+        data = load_checkpoint(path=checkpoint_path)
+        if data:
+            transcription = transcription_from_checkpoint(data)
+            if transcription and transcription.text:
+                print(f"Loaded checkpoint: {checkpoint_path}")
+                source = data.get("source", source)
+                active_checkpoint_path = checkpoint_path
+
+    if transcription is None and (reuse_chunks or skip_transcription):
+        chunks = process_input(source, reuse_chunks=True)
+        ckpt = find_checkpoint_for_chunks(chunks)
+        if ckpt and is_fully_transcribed(ckpt, len(chunks)):
+            transcription = transcription_from_checkpoint(ckpt)
+            if transcription:
+                print("Skipping Whisper — found completed transcript for these audio chunks.")
+                source = ckpt.get("source", source)
+                active_checkpoint_path = ckpt.get("_path", active_checkpoint_path)
+
+    if transcription is None:
+        if chunks is None:
+            chunks = process_input(source, reuse_chunks=reuse_chunks)
+        sk = session_key_from_chunks(chunks)
+        transcription = transcribe_all(
+            chunks,
+            language=language,
+            source=source,
+            session_key=sk,
+            resume=True,
+        )
+        save_transcribed(sk, source, language, transcription, chunks=chunks)
+
+    return _continue_from_transcription(
+        source,
+        transcription,
+        capture_code=capture_code,
+        use_course_planner=use_course_planner,
+        enforce_domain=enforce_domain,
+        output_dir=output_dir,
+        checkpoint_path=active_checkpoint_path,
     )

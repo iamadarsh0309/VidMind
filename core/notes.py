@@ -8,7 +8,10 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableLambda
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from dataclasses import asdict
+
 from core.code_validator import validate_code_in_text
+from core.checkpoint import get_notes_progress, save_notes_progress
 from core.course_planner import CourseModule, attach_code_to_modules, plan_course
 from core.llm import get_llm
 from core.notes_schema import NoteDocument, document_to_markdown, parse_markdown_to_document, save_notes_json
@@ -108,35 +111,50 @@ def _split_transcript(transcript: str, chunk_size: int = 4000, overlap: int = 30
     return splitter.split_text(transcript)
 
 
-def _section_notes_chain(query_text: str = ""):
-    system = _build_section_system_prompt(query_text)
+def _section_notes_chain():
     prompt = ChatPromptTemplate.from_messages([
-        ("system", system),
+        ("system", "{system}"),
         ("human", "Transcript section:\n\n{text}\n{code_block}"),
     ])
 
     def _prepare(inputs: dict) -> dict:
+        query = (inputs.get("query_text") or inputs.get("text", ""))[:500]
         code = inputs.get("code", "").strip()
         code_block = ""
         if code:
             code_block = f"\nOn-screen code (OCR):\n```\n{code}\n```\n"
-        return {"text": inputs["text"], "code_block": code_block}
+        return {
+            "system": _build_section_system_prompt(query),
+            "text": inputs["text"],
+            "code_block": code_block,
+        }
 
     return RunnableLambda(_prepare) | prompt | get_llm(temperature=0.2, max_tokens=4096) | StrOutputParser()
 
 
 def _synthesize_chain():
     prompt = ChatPromptTemplate.from_messages([
-        ("system", _build_synthesize_system_prompt()),
+        ("system", "{system}"),
         ("human", "Video title: {title}\n\nSection notes (in order):\n\n{text}"),
     ])
-    return prompt | get_llm(temperature=0.2, max_tokens=4096) | StrOutputParser()
+
+    def _prepare(inputs: dict) -> dict:
+        return {
+            "system": _build_synthesize_system_prompt(),
+            "title": inputs["title"],
+            "text": inputs["text"],
+        }
+
+    return RunnableLambda(_prepare) | prompt | get_llm(temperature=0.2, max_tokens=4096) | StrOutputParser()
 
 
 def _generate_module_notes(module: CourseModule) -> str:
-    section = {"text": module.transcript, "code": module.code}
-    query = module.transcript[:500]
-    chain = _section_notes_chain(query_text=query)
+    section = {
+        "text": module.transcript,
+        "code": module.code,
+        "query_text": module.transcript[:500],
+    }
+    chain = _section_notes_chain()
     header = f"<!-- module: {module.title} -->\n"
     return header + chain.invoke(section)
 
@@ -147,21 +165,59 @@ def generate_notes(
     enriched_chunks: list[dict] | None = None,
     segments: list[TranscriptSegment] | None = None,
     use_course_planner: bool = True,
+    checkpoint_path: str | None = None,
+    resume: bool = True,
 ) -> tuple[str, NoteDocument]:
     """Map-reduce notes generation. Returns (markdown, NoteDocument)."""
     module_titles: list[str] = []
+    notes_progress = None
+    if resume and checkpoint_path:
+        notes_progress = get_notes_progress(checkpoint_path)
+        if notes_progress and notes_progress.get("status") == "notes_done" and notes_progress.get("notes_md"):
+            print("Using completed notes from checkpoint.")
+            notes_md = notes_progress["notes_md"]
+            module_titles = [m.get("title", "") for m in notes_progress.get("modules", [])]
+            doc = parse_markdown_to_document(title, notes_md, modules=module_titles)
+            return notes_md, doc
 
     if use_course_planner:
-        modules = plan_course(transcript, segments=segments)
-        if enriched_chunks:
-            modules = attach_code_to_modules(modules, enriched_chunks)
-        module_titles = [m.title for m in modules]
+        modules: list[CourseModule]
+        section_notes: list[str] = []
+        start_idx = 0
+
+        if notes_progress and notes_progress.get("modules"):
+            modules = [CourseModule(**m) for m in notes_progress["modules"]]
+            section_notes = list(notes_progress.get("section_notes", []))
+            start_idx = notes_progress.get("completed_module_index", -1) + 1
+            module_titles = [m.title for m in modules]
+            if start_idx > 0:
+                print(f"Resuming notes from module {start_idx + 1}/{len(modules)}")
+        else:
+            modules = plan_course(transcript, segments=segments)
+            if enriched_chunks:
+                modules = attach_code_to_modules(modules, enriched_chunks)
+            module_titles = [m.title for m in modules]
+            if checkpoint_path:
+                save_notes_progress(
+                    checkpoint_path,
+                    modules=[asdict(m) for m in modules],
+                    section_notes=[],
+                    completed_module_index=-1,
+                )
 
         print(f"Generating notes for {len(modules)} module(s)...")
-        section_notes = []
         for i, mod in enumerate(modules):
+            if i < start_idx:
+                print(f"  - Module {i + 1}/{len(modules)}: {mod.title} (cached)")
+                continue
             print(f"  - Module {i + 1}/{len(modules)}: {mod.title}")
             section_notes.append(_generate_module_notes(mod))
+            if checkpoint_path:
+                save_notes_progress(
+                    checkpoint_path,
+                    section_notes=section_notes,
+                    completed_module_index=i,
+                )
     else:
         if enriched_chunks:
             sections = [{"text": c.get("text", ""), "code": c.get("code", "")} for c in enriched_chunks]
@@ -172,8 +228,8 @@ def generate_notes(
         section_notes = []
         for i, section in enumerate(sections):
             print(f"  - Section {i + 1}/{len(sections)}")
-            query = section.get("text", "")[:500]
-            chain = _section_notes_chain(query_text=query)
+            section = {**section, "query_text": section.get("text", "")[:500]}
+            chain = _section_notes_chain()
             section_notes.append(chain.invoke(section))
 
     combined = "\n\n---\n\n".join(section_notes)
@@ -182,6 +238,14 @@ def generate_notes(
     notes_md = validate_code_in_text(notes_md)
 
     doc = parse_markdown_to_document(title, notes_md, modules=module_titles)
+    if checkpoint_path:
+        save_notes_progress(
+            checkpoint_path,
+            section_notes=section_notes,
+            notes_md=notes_md,
+            completed_module_index=len(section_notes) - 1,
+            status="notes_done",
+        )
     return notes_md, doc
 
 

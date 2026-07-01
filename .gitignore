@@ -25,6 +25,8 @@ uv.lock
 
 # Downloads / generated media
 downloads/
+!downloads/checkpoints/
+!downloads/transcripts/
 *.wav
 *.mp3
 *.m4a
@@ -75,6 +77,7 @@ models/
 # Personal / unrelated
 resume.tex
 resume.pdf
+docs/private/
 
 # Logs
 *.log

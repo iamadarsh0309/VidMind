@@ -144,19 +144,56 @@ def transcribe_all(
     chunks: list,
     language: str = "english",
     chunk_minutes: int = 10,
+    source: str | None = None,
+    session_key: str | None = None,
+    resume: bool = True,
 ) -> TranscriptionResult:
+    from core.checkpoint import (
+        find_checkpoint_for_chunks,
+        is_fully_transcribed,
+        save_chunk_progress,
+        session_key_from_chunks,
+        transcription_from_checkpoint,
+    )
+
     engine = "Sarvam AI" if language.lower() == "hinglish" else "Whisper"
     print(f"Using {engine} for transcription.")
 
+    sk = session_key or session_key_from_chunks(chunks)
     all_segments: list[TranscriptSegment] = []
     full_text_parts: list[str] = []
+    start_index = 0
+
+    if resume:
+        ckpt = find_checkpoint_for_chunks(chunks)
+        if ckpt:
+            if is_fully_transcribed(ckpt, len(chunks)):
+                result = transcription_from_checkpoint(ckpt)
+                if result:
+                    print(f"Skipping Whisper — transcript already complete ({len(chunks)} chunks).")
+                    return result
+            start_index = ckpt.get("completed_chunk_index", -1) + 1
+            if start_index > 0:
+                full_text_parts = list(ckpt.get("text_parts", []))
+                all_segments = [
+                    TranscriptSegment(s["start"], s["end"], s["text"])
+                    for s in ckpt.get("segments", [])
+                ]
+                print(f"Resuming Whisper from chunk {start_index + 1}/{len(chunks)}")
 
     for i, chunk in enumerate(chunks):
+        if i < start_index:
+            print(f"Skipping chunk {i + 1}/{len(chunks)} (already transcribed)")
+            continue
         offset = _chunk_offset_seconds(chunk, i, chunk_minutes)
         print(f"Transcribing chunk {i + 1}/{len(chunks)}...")
         result = transcribe_chunk(chunk, language=language, time_offset=offset)
         full_text_parts.append(result.text)
         all_segments.extend(result.segments)
+        if source:
+            save_chunk_progress(
+                sk, source, language, chunks, i, all_segments, full_text_parts
+            )
 
     print("Transcription complete.")
     return TranscriptionResult(

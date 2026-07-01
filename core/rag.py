@@ -1,11 +1,9 @@
 """Split ChromaDB RAG: style collection vs knowledge collection."""
 
-# Must be set before google.protobuf / chromadb are imported (Python 3.13 + protobuf 4+).
-import os
-
-os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
+import core.bootstrap  # noqa: F401
 
 import glob
+import os
 
 from core.primary_reference import (
     is_primary_source,
@@ -185,7 +183,15 @@ def ensure_indexed() -> None:
         if knowledge_store._collection.count() == 0:
             index_knowledge_collection()
     except Exception as exc:
-        print(f"ChromaDB indexing skipped ({exc}). Using disk-based primary reference.")
+        msg = str(exc)
+        if "Descriptors cannot be created" in msg or "protobuf" in msg.lower():
+            print(
+                "ChromaDB indexing skipped (protobuf conflict). "
+                "Run: python scripts/fix_chroma_deps.py\n"
+                "Using disk-based primary reference."
+            )
+        else:
+            print(f"ChromaDB indexing skipped ({exc}). Using disk-based primary reference.")
 
 
 def _retrieve(collection: str, query: str, k: int, header: str) -> str:

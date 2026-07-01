@@ -4,11 +4,10 @@ VidMind — Personalized, code-aware video notes.
 Run: streamlit run app.py
 """
 
-import os
-
-os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
+import core.bootstrap  # noqa: F401 — env vars before ML imports
 
 import json
+import os
 
 import streamlit as st
 from dotenv import load_dotenv

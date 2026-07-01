@@ -29,7 +29,7 @@ Given a transcript (with optional timestamps), divide it into logical modules/ch
 
 Return ONLY valid JSON array:
 [
-  {"title": "Module name", "start_seconds": 0, "end_seconds": 600},
+  {{"title": "Module name", "start_seconds": 0, "end_seconds": 600}},
   ...
 ]
 
