@@ -1,0 +1,10 @@
+[server]
+# Avoid scanning site-packages (transformers/torch) and log spam on every rerun
+fileWatcherType = "none"
+
+[browser]
+gatherUsageStats = false
+
+[logger]
+# Show app logs; suppress noisy third-party debug in terminal
+level = "info"

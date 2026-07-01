@@ -52,14 +52,33 @@ def chunk_audio(wav_path:str, chunk_minutes : int = 10) -> list:
     return chunks
 
 
-def process_input(source : str) -> list:
+def find_existing_chunks(wav_path: str) -> list[str] | None:
+    """Return sorted chunk paths if they already exist for this wav."""
+    import glob as glob_mod
+
+    pattern = f"{wav_path}_chunk_*.wav"
+    paths = sorted(glob_mod.glob(pattern), key=lambda p: int(p.rsplit("_chunk_", 1)[1].replace(".wav", "")))
+    return paths if paths else None
+
+
+def process_input(source: str, *, reuse_chunks: bool = False) -> list:
     if source.startswith("http") or source.startswith("https"):
         print("Downloading audio from YouTube...")
         wav_path = download_youtube_audio(source)
+    elif source.lower().endswith(".wav"):
+        wav_path = os.path.abspath(source)
+        print(f"Using existing WAV: {wav_path}")
     else:
         print("Processing local audio file...")
         wav_path = convert_to_wav(source)
+
+    if reuse_chunks:
+        existing = find_existing_chunks(wav_path)
+        if existing:
+            print(f"Reusing {len(existing)} existing audio chunk(s) (no re-chunk).")
+            return existing
+
     print("Chunking audio...")
-    chunks =  chunk_audio(wav_path)
+    chunks = chunk_audio(wav_path)
     print(f"Generated {len(chunks)} chunks.")
     return chunks

@@ -6,8 +6,10 @@ langchain>=0.3.0
 langchain-core>=0.3.0
 langchain-community>=0.3.0
 langchain-mistralai>=0.2.0
+langchain-ollama>=0.2.0
 langchain-huggingface>=0.1.0
 langchain-chroma>=0.1.4
+langchain-text-splitters>=0.3.0
 
 # LLM API
 mistralai>=1.2.0
@@ -17,6 +19,7 @@ openai-whisper>=20231117
 faster-whisper>=1.0.3
 torch>=2.2.0
 torchaudio>=2.2.0
+torchvision>=0.17.0
 
 # Audio / YouTube
 yt-dlp>=2024.10.7
@@ -32,11 +35,17 @@ sacremoses>=0.1.1
 # Embeddings + Vector store (RAG)
 chromadb>=0.5.5
 sentence-transformers>=3.0.1
+protobuf>=3.20.0,<4.0.0
 
-# PDF / TXT export
+# PDF import + export
+pypdf>=6.0.0
 xhtml2pdf>=0.2.17
 markdown>=3.7
 reportlab>=4.2.0
+
+# OCR (handwriting + on-screen code)
+pytesseract>=0.3.10
+Pillow>=10.0.0
 
 # Utilities
 python-dotenv>=1.0.1

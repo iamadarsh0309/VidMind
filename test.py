@@ -1,30 +1,35 @@
+import core.bootstrap  # noqa: F401
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from utils.audio_processor import process_input
-from core.transcriber import transcribe_all
-from core.summarize import summarize, generate_title
-from core.notes import create_notes
-
+from core.pipeline import run_pipeline
 
 source = "https://www.youtube.com/watch?v=55pTFVoclvE"
-language = "english"  # change to "english" to test Whisper
+language = "english"
 
-
-chunks = process_input(source)
-transcript = transcribe_all(chunks, language=language)
-
+result = run_pipeline(
+    source,
+    language=language,
+    capture_code=True,
+    use_course_planner=True,
+    enforce_domain=True,
+)
 
 print("\n=== TRANSCRIPT ===\n")
-print(transcript)
+print(result.transcript[:2000], "...")
 
 print("\n=== TITLE ===\n")
-title = generate_title(transcript)
-print(title)
+print(result.title)
+
+if result.modules:
+    print("\n=== MODULES ===\n")
+    for m in result.modules:
+        print(f" - {m}")
 
 print("\n=== SUMMARY ===\n")
-print(summarize(transcript))
+print(result.summary)
 
 print("\n=== NOTES ===\n")
-create_notes(transcript, title)
+print(f"Saved to:\n  - {result.note_paths['md']}\n  - {result.note_paths['pdf']}\n  - {result.note_paths['json']}")
