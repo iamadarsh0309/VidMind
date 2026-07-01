@@ -9,7 +9,7 @@
 python scripts/digitize_pdf.py style_samples/fastapi_tutorial.pdf --index
 ```
 
-Extracted chunks live in `style_samples/extracted/fastapi_tutorial/` and are injected into every note generation prompt.
+Extracted chunks are written to `style_samples/extracted/fastapi_tutorial/` locally (gitignored). Run the command above after placing your PDF — they are **not** committed to the repo.
 
 Configure in `.env`:
 ```

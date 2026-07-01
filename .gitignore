@@ -49,6 +49,10 @@ style_samples/scans/*
 # Large PDF sources — extract to style_samples/extracted/ instead
 style_samples/*.pdf
 
+# Extracted PDF chunks (generated locally; do not commit)
+style_samples/extracted/**
+!style_samples/extracted/.gitkeep
+
 # Vector store / local DBs
 chroma_db/
 *.sqlite3
